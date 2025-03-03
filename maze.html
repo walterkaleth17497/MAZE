@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Maze Game - Mi Juego</title>
+    <!-- Cargamos p5.js desde un CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+    <!-- Si usas imágenes o SVG, puedes incluir las extensiones correspondientes -->
+    <style>
+      body { margin: 0; padding: 0; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <script>
+      // VARIABLES GLOBALES
+      let floorColor, wallColor;
+      let maze, player, mainSpider;
+      let extraSpiders = [];
+      let spiderActive = false;
+      let gameState = 0; // 0: jugando, 1: ganar, 2: perder
+
+      let difficulty;
+      let prevDifficulty = 0;
+      let attemptCount = 0;
+
+      let extraSpidersCount = 2;
+      let mainSpiderDelay = 20;
+      let extraSpiderDelay = 30;
+
+      let score = 0;
+      let level = 1;
+
+      let cols, rows, cellSize;
+      let marginX, marginY;
+
+      let trees = [];
+      let webs = [];
+
+      let playerImg, spiderImg; // Si tienes imágenes, colócalas en la carpeta adecuada
+      let startScreen = true;
+      
+      let borderSpiders = [];
+      let gameStartTime = 0;
+      let lastMoveTime = 0;
+      let mainSpiderSpawnTime = -1;
+      let endTime = 0;
+      let copiedTimer = 0;
+
+      let borderSizeMin = 0.5;
+      let borderSizeMax = 1.5;
+      let borderSpeedMultiplier = 1.0;
+      let borderFillColor;
+      
+      let scoreBarHeight = 60;
+      let ethAddress = "0x766904af4E6C5F727c3324890EcE9c7f36Fc78e2";
+      
+      // BlueCharacter: se muestra en dificultades 4 y 5
+      let blueChar = null;
+      let blueCharSpawned = false;
+      
+      // Preload: carga imágenes si están disponibles (de lo contrario se usan dibujos básicos)
+      function preload() {
+        // Si tienes los archivos en la carpeta, descomenta estas líneas
+        // playerImg = loadImage("person.png");
+        // spiderImg = loadImage("spider.png");
+      }
+      
+      function setup() {
+        createCanvas(800, 800);
+        frameRate(30);
+        borderFillColor = color(150);
+        selectDifficulty();
+      }
+      
+      function draw() {
+        background(200, 255, 200);
+        drawLabyrinthBackground();
+        
+        for (let bs of borderSpiders) {
+          bs.update();
+          bs.display();
+        }
+        
+        maze.display();
+        drawTrees();
+        drawWebs();
+        
+        fill(0);
+        textAlign(CENTER, CENTER);
+        textSize(cellSize * 0.3);
+        text("START", marginX + cellSize / 2, marginY + cellSize / 2);
+        text("GOAL", marginX + (cols - 1) * cellSize + cellSize / 2, marginY + (rows - 1) * cellSize + cellSize / 2);
+        
+        drawDifficultyBar();
+        drawScoreBar();
+        drawCopyAnimation();
+        
+        if (startScreen) {
+          fill(0, 0, 0, 150);
+          rect(0, 0, width, height);
+          fill(255);
+          textAlign(CENTER, CENTER);
+          textSize(40);
+          text("Do you want to play?\nPress arrow keys to start\nPress 'S' to save image\nPress 'V' to export SVG", width / 2, height / 2);
+          return;
+        }
+        
+        // En dificultades 4 y 5, BlueCharacter aparece en la parte superior después de 10 segundos
+        if ((difficulty === 4 || difficulty === 5) && !blueCharSpawned && (millis() - gameStartTime > 10000)) {
+          let spawnCol = floor(random(cols));
+          blueChar = new BlueCharacter(spawnCol, 0, cellSize);
+          blueCharSpawned = true;
+        }
+        
+        if (blueChar) {
+          if (blueChar.alive) {
+            blueChar.move();
+            blueChar.display();
+          } else {
+            let dt = millis() - blueChar.deathTime;
+            if (dt < 2000) {
+              let centerX = marginX + blueChar.col * cellSize + cellSize / 2;
+              let centerY = marginY + blueChar.row * cellSize + cellSize / 2;
+              noStroke();
+              fill(255, 0, 0, map(dt, 0, 2000, 255, 0));
+              ellipse(centerX, centerY, cellSize, cellSize);
+              fill(255, 255, 255, map(dt, 0, 2000, 255, 0));
+              textAlign(CENTER, CENTER);
+              textSize(20);
+              text("DEATH", centerX, centerY);
+            } else {
+              blueChar = null;
+            }
+          }
+        }
+        
+        if (gameState === 0) {
+          player.display();
+          let totalDistance = (cols - 1) + (rows - 1);
+          let currentDistance = player.col + player.row;
+          
+          if (!spiderActive && ((currentDistance >= 0.4 * totalDistance) || (millis() - lastMoveTime >= 45000))) {
+            mainSpider = new Spider(cols - 1, 0, cellSize, mainSpiderDelay);
+            spiderActive = true;
+            if (mainSpiderSpawnTime < 0) {
+              mainSpiderSpawnTime = millis();
+            }
+          }
+          if (spiderActive && mainSpider) {
+            mainSpider.move();
+            mainSpider.display();
+            if (blueChar && blueChar.alive && mainSpider.col === blueChar.col && mainSpider.row === blueChar.row) {
+              blueChar.die();
+            }
+            if (mainSpider.col === player.col && mainSpider.row === player.row) {
+              gameState = 2;
+              endTime = millis();
+            }
+          }
+          
+          if (extraSpiders.length < extraSpidersCount && ((currentDistance >= 0.7 * totalDistance) || (mainSpiderSpawnTime > 0 && millis() - mainSpiderSpawnTime >= 45000))) {
+            spawnExtraSpiders();
+          }
+          for (let sp of extraSpiders) {
+            sp.move();
+            sp.display();
+            if (blueChar && blueChar.alive && sp.col === blueChar.col && sp.row === blueChar.row) {
+              blueChar.die();
+            }
+            if (sp.col === player.col && sp.row === player.row) {
+              gameState = 2;
+              endTime = millis();
+            }
+          }
+          
+          if (player.col === cols - 1 && player.row === rows - 1) {
+            gameState = 1;
+            endTime = millis();
+          }
+        } else {
+          textAlign(CENTER, CENTER);
+          textSize(64);
+          if (gameState === 1) {
+            fill(0, 200, 0);
+            text("Congratulations!", width / 2, height / 2 - 40);
+          } else if (gameState === 2) {
+            fill(200, 0, 0);
+            text("Game Over", width / 2, height / 2 - 40);
+          }
+          if (millis() - endTime > 2000) {
+            textSize(32);
+            fill(0);
+            text("Press ENTER to play again", width / 2, height / 2 + 40);
+          }
+        }
+        
+        if (copiedTimer > 0) copiedTimer--;
+      }
+      
+      // FUNCIONES DE DIBUJO
+      function drawLabyrinthBackground() {
+        noStroke();
+        fill(floorColor);
+        rect(marginX, marginY, cols * cellSize, rows * cellSize);
+      }
+      
+      function drawTrees() {
+        for (let pos of trees) {
+          let x = marginX + pos.x * cellSize;
+          let y = marginY + pos.y * cellSize;
+          fill(101, 67, 33);
+          rect(x + cellSize * 0.45, y + cellSize * 0.6, cellSize * 0.1, cellSize * 0.3);
+          fill(34, 139, 34);
+          ellipse(x + cellSize / 2, y + cellSize * 0.5, cellSize * 0.6, cellSize * 0.6);
+        }
+      }
+      
+      function drawWebs() {
+        for (let pos of webs) {
+          drawWeb(pos.x, pos.y, 20);
+          fill(150);
+          ellipse(pos.x + 10, pos.y + 10, 10, 10);
+        }
+      }
+      
+      function drawWeb(x, y, size) {
+        stroke(150, 150, 150, 200);
+        noFill();
+        ellipse(x, y, size, size);
+        for (let i = 0; i < 8; i++) {
+          let angle = TWO_PI / 8 * i;
+          line(x, y, x + cos(angle) * size / 2, y + sin(angle) * size / 2);
+        }
+      }
+      
+      function drawDifficultyBar() {
+        let barWidth = 150;
+        let barHeightLocal = 40;
+        let x = width - barWidth - 10;
+        let y = 10;
+        let barColor = color(0);
+        let spiderIcons = 0;
+        if (difficulty === 1) {
+          barColor = color(0, 200, 0);
+          spiderIcons = 1;
+        } else if (difficulty === 2) {
+          barColor = color(255, 200, 0);
+          spiderIcons = 2;
+        } else if (difficulty === 3) {
+          barColor = color(200, 0, 0);
+          spiderIcons = 3;
+        } else if (difficulty === 4) {
+          spiderIcons = 4;
+        } else if (difficulty === 5) {
+          spiderIcons = 5;
+        } else {
+          barColor = color(100);
+          spiderIcons = 1;
+        }
+        if (difficulty === 4) {
+          noStroke();
+          fill(255, 0, 0);
+          rect(x, y, barWidth / 2, barHeightLocal);
+          fill(0);
+          rect(x + barWidth / 2, y, barWidth / 2, barHeightLocal);
+        } else if (difficulty === 5) {
+          noStroke();
+          fill(255, 0, 0);
+          rect(x, y, barWidth / 3, barHeightLocal);
+          fill(0);
+          rect(x + barWidth / 3, y, barWidth / 3, barHeightLocal);
+          fill(255, 165, 0);
+          rect(x + 2 * barWidth / 3, y, barWidth / 3, barHeightLocal);
+        } else {
+          fill(barColor);
+          noStroke();
+          rect(x, y, barWidth, barHeightLocal, 10);
+        }
+        fill(255);
+        textAlign(CENTER, CENTER);
+        textSize(16);
+        text("Difficulty", x + barWidth / 2, y + 12);
+        let iconSize = 16;
+        let spacing = (barWidth - spiderIcons * iconSize) / (spiderIcons + 1);
+        for (let i = 0; i < spiderIcons; i++) {
+          let ix = x + spacing + i * (iconSize + spacing);
+          let iy = y + barHeightLocal - iconSize / 2 - 5;
+          drawSpiderIcon(ix, iy, iconSize);
+        }
+      }
+      
+      function drawSpiderIcon(cx, cy, size) {
+        fill(150);
+        noStroke();
+        ellipse(cx, cy, size, size);
+        stroke(0);
+        for (let i = 0; i < 8; i++) {
+          let angle = TWO_PI / 8 * i;
+          let sx = cx + cos(angle) * size * 0.4;
+          let sy = cy + sin(angle) * size * 0.4;
+          let ex = cx + cos(angle) * size * 0.6;
+          let ey = cy + sin(angle) * size * 0.6;
+          line(sx, sy, ex, ey);
+        }
+      }
+      
+      function drawScoreBar() {
+        noStroke();
+        fill(red(borderFillColor), green(borderFillColor), blue(borderFillColor), 150);
+        rect(0, height - scoreBarHeight, width, scoreBarHeight);
+        textAlign(CENTER, CENTER);
+        fill(255);
+        textSize(18);
+        text("Level: " + level + "    Score: " + score, width / 2, height - scoreBarHeight * 0.35);
+        textSize(20);
+        let donationLabel = "Donate to creator ETH:";
+        let copyLabel = "Copy";
+        let donationTextWidth = textWidth(donationLabel + " " + ethAddress + " ");
+        let copyTextWidth = textWidth(copyLabel);
+        let totalWidth = donationTextWidth + copyTextWidth;
+        let startX = (width - totalWidth) / 2;
+        let posY = height - scoreBarHeight * 0.65;
+        textAlign(LEFT, CENTER);
+        fill(255);
+        text(donationLabel + " " + ethAddress + " ", startX, posY);
+        fill(0, 255, 0);
+        text(copyLabel, startX + donationTextWidth, posY);
+      }
+      
+      function drawCopyAnimation() {
+        if (copiedTimer > 0) {
+          let alpha = map(copiedTimer, 0, 60, 0, 255);
+          textAlign(CENTER, CENTER);
+          textSize(48);
+          fill(0, 0, 255, alpha);
+          let centerX = marginX + (cols * cellSize) / 2;
+          let centerY = marginY + (rows * cellSize) / 2;
+          text("Copied!", centerX, centerY);
+        }
+      }
+      
+      // MANEJO DE TECLADO Y MOUSE
+      function keyPressed() {
+        if (startScreen) {
+          startScreen = false;
+          gameStartTime = millis();
+          lastMoveTime = millis();
+          return;
+        }
+        if (key === "v" || key === "V") {
+          console.log("SVG export not implemented in this version.");
+          return;
+        }
+        if (key === "s" || key === "S") {
+          saveCanvas("MazeGame", "png");
+          console.log("Image saved as MazeGame.png");
+        }
+        if ((gameState === 1 || gameState === 2) && keyCode === ENTER && millis() - endTime > 2000) {
+          if (gameState === 1) {
+            if (level === 1) score += 200;
+            else if (level === 2) score += 300;
+            else if (level === 3) score += 400;
+            else if (level === 4) score += 500;
+            else if (level >= 5) score += 1000;
+            level++;
+          } else {
+            score = max(score - 100, 0);
+          }
+          selectDifficulty();
+          return;
+        }
+        if (gameState === 0) {
+          if (keyCode === UP_ARROW) {
+            player.move(0, -1, maze);
+            lastMoveTime = millis();
+          } else if (keyCode === DOWN_ARROW) {
+            player.move(0, 1, maze);
+            lastMoveTime = millis();
+          } else if (keyCode === LEFT_ARROW) {
+            player.move(-1, 0, maze);
+            lastMoveTime = millis();
+          } else if (keyCode === RIGHT_ARROW) {
+            player.move(1, 0, maze);
+            lastMoveTime = millis();
+          }
+        }
+      }
+      
+      function mouseClicked() {
+        textSize(20);
+        let donationLabel = "Donate to creator ETH:";
+        let copyLabel = "Copy";
+        let donationTextWidth = textWidth(donationLabel + " " + ethAddress + " ");
+        let copyTextWidth = textWidth(copyLabel);
+        let totalWidth = donationTextWidth + copyTextWidth;
+        let startX = (width - totalWidth) / 2;
+        let posY = height - scoreBarHeight * 0.65;
+        let textH = textAscent() + textDescent();
+        let regionX = startX + donationTextWidth;
+        let regionY = posY - textH / 2;
+        if (mouseX >= regionX && mouseX <= regionX + copyTextWidth && mouseY >= regionY && mouseY <= regionY + textH) {
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(ethAddress).then(() => {
+              copiedTimer = 60;
+              console.log("ETH address copied.");
+            });
+          } else {
+            console.log("Clipboard API not available.");
+          }
+        }
+      }
+      
+      // SPAWN EXTRA SPIDERS según dificultad
+      function spawnExtraSpiders() {
+        extraSpiders = [];
+        if (difficulty < 4) {
+          extraSpiders.push(new Spider(floor(cols / 2), rows - 1, cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(cols - 1, floor(rows / 2), cellSize, extraSpiderDelay));
+        } else if (difficulty === 4) {
+          extraSpiders.push(new Spider(floor(cols / 2), rows - 1, cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(cols - 1, floor(rows / 2), cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(floor(cols / 2), floor(rows / 2), cellSize, extraSpiderDelay));
+        } else if (difficulty === 5) {
+          extraSpiders.push(new Spider(floor(cols / 2), rows - 1, cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(cols - 1, floor(rows / 2), cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(0, floor(rows / 2), cellSize, extraSpiderDelay));
+          extraSpiders.push(new Spider(floor(cols / 2), 0, cellSize, extraSpiderDelay));
+        }
+      }
+      
+      // CLASES
+      class Maze {
+        constructor(cols, rows, cellSize) {
+          this.cols = cols;
+          this.rows = rows;
+          this.cellSize = cellSize;
+          this.grid = [];
+          for (let i = 0; i < cols; i++) {
+            this.grid[i] = [];
+            for (let j = 0; j < rows; j++) {
+              this.grid[i][j] = new Cell(i, j, cellSize);
+            }
+          }
+        }
+        
+        generate() {
+          let stack = [];
+          let current = this.grid[0][0];
+          current.visited = true;
+          do {
+            let next = this.getUnvisitedNeighbor(current);
+            if (next) {
+              next.visited = true;
+              stack.push(current);
+              this.removeWalls(current, next);
+              current = next;
+            } else if (stack.length > 0) {
+              current = stack.pop();
+            }
+          } while (stack.length > 0);
+        }
+        
+        getUnvisitedNeighbor(cell) {
+          let neighbors = [];
+          let i = cell.i, j = cell.j;
+          if (j > 0 && !this.grid[i][j - 1].visited) neighbors.push(this.grid[i][j - 1]);
+          if (i < this.cols - 1 && !this.grid[i + 1][j].visited) neighbors.push(this.grid[i + 1][j]);
+          if (j < this.rows - 1 && !this.grid[i][j + 1].visited) neighbors.push(this.grid[i][j + 1]);
+          if (i > 0 && !this.grid[i - 1][j].visited) neighbors.push(this.grid[i - 1][j]);
+          if (neighbors.length > 0) return random(neighbors);
+          return undefined;
+        }
+        
+        removeWalls(a, b) {
+          let x = a.i - b.i;
+          if (x === 1) {
+            a.walls[3] = false;
+            b.walls[1] = false;
+          } else if (x === -1) {
+            a.walls[1] = false;
+            b.walls[3] = false;
+          }
+          let y = a.j - b.j;
+          if (y === 1) {
+            a.walls[0] = false;
+            b.walls[2] = false;
+          } else if (y === -1) {
+            a.walls[2] = false;
+            b.walls[0] = false;
+          }
+        }
+        
+        display() {
+          stroke(wallColor);
+          strokeWeight(2);
+          for (let i = 0; i < this.cols; i++) {
+            for (let j = 0; j < this.rows; j++) {
+              this.grid[i][j].display();
+            }
+          }
+        }
+        
+        getReachableNeighbors(i, j) {
+          let list = [];
+          let current = this.grid[i][j];
+          if (!current.walls[0] && j > 0) list.push(createVector(i, j - 1));
+          if (!current.walls[1] && i < this.cols - 1) list.push(createVector(i + 1, j));
+          if (!current.walls[2] && j < this.rows - 1) list.push(createVector(i, j + 1));
+          if (!current.walls[3] && i > 0) list.push(createVector(i - 1, j));
+          return list;
+        }
+      }
+      
+      class Cell {
+        constructor(i, j, cellSize) {
+          this.i = i;
+          this.j = j;
+          this.cellSize = cellSize;
+          this.walls = [true, true, true, true];
+          this.visited = false;
+        }
+        
+        display() {
+          let x = marginX + this.i * this.cellSize;
+          let y = marginY + this.j * this.cellSize;
+          if (this.walls[0]) line(x, y, x + this.cellSize, y);
+          if (this.walls[1]) line(x + this.cellSize, y, x + this.cellSize, y + this.cellSize);
+          if (this.walls[2]) line(x + this.cellSize, y + this.cellSize, x, y + this.cellSize);
+          if (this.walls[3]) line(x, y + this.cellSize, x, y);
+        }
+      }
+      
+      class Player {
+        constructor(col, row, cellSize) {
+          this.col = col;
+          this.row = row;
+          this.cellSize = cellSize;
+        }
+        
+        display() {
+          let cx = marginX + this.col * this.cellSize + this.cellSize / 2;
+          let cy = marginY + this.row * this.cellSize + this.cellSize / 2;
+          if (playerImg) {
+            imageMode(CENTER);
+            image(playerImg, cx, cy, this.cellSize * 0.8, this.cellSize * 0.8);
+          } else {
+            noStroke();
+            fill(241, 194, 125);
+            ellipse(cx, cy - this.cellSize * 0.3, this.cellSize * 0.4, this.cellSize * 0.4);
+            stroke(0);
+            line(cx, cy - this.cellSize * 0.1, cx, cy + this.cellSize * 0.2);
+            line(cx, cy, cx - this.cellSize * 0.2, cy + this.cellSize * 0.1);
+            line(cx, cy, cx + this.cellSize * 0.2, cy + this.cellSize * 0.1);
+            line(cx, cy + this.cellSize * 0.2, cx - this.cellSize * 0.1, cy + this.cellSize * 0.4);
+            line(cx, cy + this.cellSize * 0.2, cx + this.cellSize * 0.1, cy + this.cellSize * 0.4);
+          }
+        }
+        
+        move(dx, dy, maze) {
+          let newCol = this.col + dx;
+          let newRow = this.row + dy;
+          if (newCol < 0 || newCol >= maze.cols || newRow < 0 || newRow >= maze.rows) return;
+          let current = maze.grid[this.col][this.row];
+          if (dx === 0 && dy === -1 && !current.walls[0]) this.row = newRow;
+          else if (dx === 0 && dy === 1 && !current.walls[2]) this.row = newRow;
+          else if (dx === -1 && dy === 0 && !current.walls[3]) this.col = newCol;
+          else if (dx === 1 && dy === 0 && !current.walls[1]) this.col = newCol;
+        }
+      }
+      
+      class Spider {
+        constructor(col, row, cellSize, moveDelay) {
+          this.col = col;
+          this.row = row;
+          this.cellSize = cellSize;
+          this.moveDelay = moveDelay;
+          this.frameCounter = 0;
+        }
+        
+        display() {
+          let cx = marginX + this.col * this.cellSize + this.cellSize / 2;
+          let cy = marginY + this.row * this.cellSize + this.cellSize / 2;
+          tint(200, 0, 0, 255);
+          if (spiderImg) {
+            imageMode(CENTER);
+            image(spiderImg, cx, cy, this.cellSize * 0.8, this.cellSize * 0.8);
+          } else {
+            noTint();
+            noStroke();
+            fill(200, 0, 0);
+            ellipse(cx, cy, this.cellSize * 0.5, this.cellSize * 0.5);
+            stroke(0);
+            for (let i = 0; i < 8; i++) {
+              let angle = TWO_PI / 8 * i;
+              let startX = cx + cos(angle) * this.cellSize * 0.25;
+              let startY = cy + sin(angle) * this.cellSize * 0.25;
+              let endX = cx + cos(angle) * this.cellSize * 0.4;
+              let endY = cy + sin(angle) * this.cellSize * 0.4;
+              line(startX, startY, endX, endY);
+            }
+          }
+          noTint();
+        }
+        
+        move() {
+          this.frameCounter++;
+          if (this.frameCounter < this.moveDelay) return;
+          this.frameCounter = 0;
+          let targetCol, targetRow;
+          if (blueChar && blueChar.alive) {
+            targetCol = blueChar.col;
+            targetRow = blueChar.row;
+          } else {
+            targetCol = player.col;
+            targetRow = player.row;
+          }
+          let path = this.computePath(this.col, this.row, targetCol, targetRow);
+          if (path && path.length > 1) {
+            let nextStep = path[1];
+            this.col = nextStep.i;
+            this.row = nextStep.j;
+          }
+        }
+        
+        computePath(startI, startJ, goalI, goalJ) {
+          let openList = [];
+          let closedList = [];
+          let startNode = new Node(startI, startJ, null, 0, this.heuristic(startI, startJ, goalI, goalJ));
+          openList.push(startNode);
+          while (openList.length > 0) {
+            let current = openList[0];
+            for (let n of openList) {
+              if (n.f < current.f) current = n;
+            }
+            if (current.i === goalI && current.j === goalJ) return this.reconstructPath(current);
+            openList = openList.filter(n => n !== current);
+            closedList.push(current);
+            let neighbors = maze.getReachableNeighbors(current.i, current.j);
+            for (let neighbor of neighbors) {
+              let ni = neighbor.x, nj = neighbor.y;
+              if (closedList.some(n => n.i === ni && n.j === nj)) continue;
+              let tentativeG = current.g + 1;
+              let neighborNode = openList.find(n => n.i === ni && n.j === nj);
+              if (!neighborNode) {
+                neighborNode = new Node(ni, nj, current, tentativeG, this.heuristic(ni, nj, goalI, goalJ));
+                openList.push(neighborNode);
+              } else if (tentativeG < neighborNode.g) {
+                neighborNode.g = tentativeG;
+                neighborNode.f = neighborNode.g + neighborNode.h;
+                neighborNode.parent = current;
+              }
+            }
+          }
+          return null;
+        }
+        
+        reconstructPath(node) {
+          let path = [];
+          let current = node;
+          while (current != null) {
+            path.unshift(current);
+            current = current.parent;
+          }
+          return path;
+        }
+        
+        heuristic(i, j, goalI, goalJ) {
+          return abs(goalI - i) + abs(goalJ - j);
+        }
+      }
+      
+      class BlueCharacter {
+        constructor(col, row, cellSize) {
+          this.col = col;
+          this.row = row;
+          this.cellSize = cellSize;
+          this.alive = true;
+          this.fallen = false;
+          this.deathTime = 0;
+          this.moveDelay = 40;
+          this.frameCounter = 0;
+        }
+        
+        move() {
+          if (!this.alive || this.fallen) return;
+          this.frameCounter++;
+          if (this.frameCounter < this.moveDelay) return;
+          this.frameCounter = 0;
+          let path = this.computePath(this.col, this.row, cols - 1, rows - 1);
+          if (path && path.length > 1) {
+            let nextStep = path[1];
+            this.col = nextStep.i;
+            this.row = nextStep.j;
+          }
+        }
+        
+        die() {
+          this.alive = false;
+          this.fallen = true;
+          this.deathTime = millis();
+        }
+        
+        display() {
+          let cx = marginX + this.col * this.cellSize + this.cellSize / 2;
+          let cy = marginY + this.row * this.cellSize + this.cellSize / 2;
+          if (this.alive) {
+            stroke(0);
+            fill(0, 0, 255);
+            ellipse(cx, cy - this.cellSize * 0.2, this.cellSize * 0.3, this.cellSize * 0.3);
+            line(cx, cy - this.cellSize * 0.05, cx, cy + this.cellSize * 0.2);
+            line(cx, cy, cx - this.cellSize * 0.15, cy + this.cellSize * 0.05);
+            line(cx, cy, cx + this.cellSize * 0.15, cy + this.cellSize * 0.05);
+            line(cx, cy + this.cellSize * 0.2, cx - this.cellSize * 0.1, cy + this.cellSize * 0.4);
+            line(cx, cy + this.cellSize * 0.2, cx + this.cellSize * 0.1, cy + this.cellSize * 0.4);
+          } else {
+            stroke(0);
+            fill(255, 0, 0);
+            ellipse(cx, cy, this.cellSize * 0.8, this.cellSize * 0.8);
+            textAlign(CENTER, CENTER);
+            textSize(20);
+            fill(255);
+            text("DEATH", cx, cy);
+          }
+        }
+        
+        computePath(startI, startJ, goalI, goalJ) {
+          let openList = [];
+          let closedList = [];
+          let startNode = new Node(startI, startJ, null, 0, this.heuristic(startI, startJ, goalI, goalJ));
+          openList.push(startNode);
+          while (openList.length > 0) {
+            let current = openList[0];
+            for (let n of openList) {
+              if (n.f < current.f) current = n;
+            }
+            if (current.i === goalI && current.j === goalJ) return this.reconstructPath(current);
+            openList = openList.filter(n => n !== current);
+            closedList.push(current);
+            let neighbors = maze.getReachableNeighbors(current.i, current.j);
+            for (let neighbor of neighbors) {
+              let ni = neighbor.x, nj = neighbor.y;
+              if (closedList.some(n => n.i === ni && n.j === nj)) continue;
+              let tentativeG = current.g + 1;
+              let neighborNode = openList.find(n => n.i === ni && n.j === nj);
+              if (!neighborNode) {
+                neighborNode = new Node(ni, nj, current, tentativeG, this.heuristic(ni, nj, goalI, goalJ));
+                openList.push(neighborNode);
+              } else if (tentativeG < neighborNode.g) {
+                neighborNode.g = tentativeG;
+                neighborNode.f = neighborNode.g + neighborNode.h;
+                neighborNode.parent = current;
+              }
+            }
+          }
+          return null;
+        }
+        
+        reconstructPath(node) {
+          let path = [];
+          let current = node;
+          while (current != null) {
+            path.unshift(current);
+            current = current.parent;
+          }
+          return path;
+        }
+        
+        heuristic(i, j, goalI, goalJ) {
+          return abs(goalI - i) + abs(goalJ - j);
+        }
+      }
+      
+      class BorderSpider {
+        constructor(borderType, pos) {
+          this.borderType = borderType;
+          if (borderType === "top") {
+            this.x = pos;
+            this.y = marginY - cellSize / 2;
+            this.dx = random(-1, 1);
+            this.dy = 0;
+          } else if (borderType === "bottom") {
+            this.x = pos;
+            this.y = marginY + rows * cellSize + cellSize / 2;
+            this.dx = random(-1, 1);
+            this.dy = 0;
+          } else if (borderType === "left") {
+            this.x = marginX - cellSize / 2;
+            this.y = pos;
+            this.dx = 0;
+            this.dy = random(-1, 1);
+          } else if (borderType === "right") {
+            this.x = marginX + cols * cellSize + cellSize / 2;
+            this.y = pos;
+            this.dx = 0;
+            this.dy = random(-1, 1);
+          }
+          this.size = random(borderSizeMin, borderSizeMax);
+          this.dx *= borderSpeedMultiplier;
+          this.dy *= borderSpeedMultiplier;
+        }
+        
+        update() {
+          this.x += this.dx;
+          this.y += this.dy;
+          if (this.borderType === "top") {
+            if (this.x < marginX || this.x > marginX + cols * cellSize) this.dx *= -1;
+          } else if (this.borderType === "bottom") {
+            if (this.x < marginX || this.x > marginX + cols * cellSize) this.dx *= -1;
+          } else if (this.borderType === "left") {
+            if (this.y < marginY || this.y > marginY + rows * cellSize) this.dy *= -1;
+          } else if (this.borderType === "right") {
+            if (this.y < marginY || this.y > marginY + rows * cellSize) this.dy *= -1;
+          }
+        }
+        
+        display() {
+          let s = cellSize * 0.5 * this.size;
+          imageMode(CENTER);
+          if (spiderImg) {
+            tint(borderFillColor, 200);
+            image(spiderImg, this.x, this.y, s, s);
+            noTint();
+          } else {
+            fill(borderFillColor);
+            ellipse(this.x, this.y, s, s);
+            stroke(difficulty >= 4 ? color(255, 0, 0) : 0);
+            for (let i = 0; i < 8; i++) {
+              let angle = TWO_PI / 8 * i;
+              let startX = this.x + cos(angle) * s * 0.5;
+              let startY = this.y + sin(angle) * s * 0.5;
+              let endX = this.x + cos(angle) * s * 0.8;
+              let endY = this.y + sin(angle) * s * 0.8;
+              line(startX, startY, endX, endY);
+            }
+          }
+        }
+      }
+      
+      class Node {
+        constructor(i, j, parent, g, h) {
+          this.i = i;
+          this.j = j;
+          this.parent = parent;
+          this.g = g;
+          this.h = h;
+          this.f = g + h;
+        }
+      }
+      
+      // Función para seleccionar dificultad y reiniciar el juego
+      function selectDifficulty() {
+        attemptCount++;
+        if (attemptCount % 20 === 0) {
+          difficulty = 5;
+        } else if (attemptCount % 10 === 0) {
+          difficulty = 4;
+        } else {
+          let newDiff;
+          do {
+            newDiff = floor(random(1, 4));
+          } while (newDiff === prevDifficulty);
+          difficulty = newDiff;
+        }
+        prevDifficulty = difficulty;
+        
+        if (difficulty === 1) {
+          cols = rows = 16;
+          mainSpiderDelay = 20;
+          extraSpiderDelay = 30;
+          extraSpidersCount = 2;
+          borderSizeMin = 0.5;
+          borderSizeMax = 1.5;
+          borderSpeedMultiplier = 1.0;
+          borderFillColor = color(150);
+        } else if (difficulty === 2) {
+          cols = rows = 24;
+          mainSpiderDelay = 20;
+          extraSpiderDelay = 30;
+          extraSpidersCount = 2;
+          borderSizeMin = 0.5;
+          borderSizeMax = 1.5;
+          borderSpeedMultiplier = 1.0;
+          borderFillColor = color(150);
+        } else { // dificultades 3, 4 y 5 usan 32x32
+          cols = rows = 32;
+          if (difficulty === 3) {
+            mainSpiderDelay = 20;
+            extraSpiderDelay = 30;
+            extraSpidersCount = 2;
+            borderSizeMin = 0.5;
+            borderSizeMax = 1.5;
+            borderSpeedMultiplier = 1.0;
+            borderFillColor = color(150);
+          } else if (difficulty === 4) {
+            mainSpiderDelay = floor(20 * 0.97);
+            extraSpiderDelay = floor(30 * 0.97);
+            extraSpidersCount = 3;
+            borderSizeMin = 2.0;
+            borderSizeMax = 3.0;
+            borderSpeedMultiplier = 1.5;
+            borderFillColor = color(0, 0, 0);
+          } else if (difficulty === 5) {
+            mainSpiderDelay = floor(20 * 0.96);
+            extraSpiderDelay = floor(30 * 0.96);
+            extraSpidersCount = 4;
+            borderSizeMin = 3.0;
+            borderSizeMax = 4.0;
+            borderSpeedMultiplier = 1.7;
+            borderFillColor = color(200, 0, 0);
+          }
+        }
+        
+        marginX = width * 0.1;
+        cellSize = (width - 2 * marginX) / cols;
+        marginY = ((height - scoreBarHeight) - (rows * cellSize)) / 2;
+        
+        floorColor = color(random(220, 255), random(220, 255), random(220, 255));
+        wallColor = color(random(50, 100), random(50, 100), random(50, 100));
+        
+        maze = new Maze(cols, rows, cellSize);
+        maze.generate();
+        
+        // Opcional: modifica algunas paredes a lo largo de la solución
+        let sol = getSolutionPath();
+        if (sol !== null) {
+          for (let k = 0; k < sol.length; k++) {
+            let i = sol[k].x;
+            let j = sol[k].y;
+            if (random(1) < 0.3) {
+              let dirs = [];
+              if (j > 0 && maze.grid[i][j].walls[0]) dirs.push(0);
+              if (i < cols - 1 && maze.grid[i][j].walls[1]) dirs.push(1);
+              if (j < rows - 1 && maze.grid[i][j].walls[2]) dirs.push(2);
+              if (i > 0 && maze.grid[i][j].walls[3]) dirs.push(3);
+              if (dirs.length > 0) {
+                let d = random(dirs);
+                maze.grid[i][j].walls[d] = false;
+                let ni = i, nj = j;
+                if (d === 0) { nj = j - 1; maze.grid[ni][nj].walls[2] = false; }
+                else if (d === 1) { ni = i + 1; maze.grid[ni][nj].walls[3] = false; }
+                else if (d === 2) { nj = j + 1; maze.grid[ni][nj].walls[0] = false; }
+                else if (d === 3) { ni = i - 1; maze.grid[ni][nj].walls[1] = false; }
+              }
+            }
+          }
+        }
+        
+        // Generar árboles y webs
+        trees = [];
+        for (let i = 0; i < cols; i++) {
+          for (let j = 0; j < rows; j++) {
+            if ((i === 0 && j === 0) || (i === cols - 1 && j === rows - 1)) continue;
+            if (random(1) < 0.05) trees.push(createVector(i, j));
+          }
+        }
+        webs = [];
+        for (let k = 0; k < 10; k++) {
+          let wx = random(0, width);
+          let wy = random(0, height);
+          if (wx < marginX || wx > marginX + cols * cellSize || wy < marginY || wy > marginY + rows * cellSize) {
+            webs.push(createVector(wx, wy));
+          }
+        }
+        
+        player = new Player(0, 0, cellSize);
+        spiderActive = false;
+        mainSpider = null;
+        extraSpiders = [];
+        blueChar = null;
+        blueCharSpawned = false;
+        gameState = 0;
+        startScreen = true;
+        endTime = 0;
+        gameStartTime = millis();
+        lastMoveTime = millis();
+        mainSpiderSpawnTime = -1;
+        
+        borderSpiders = [];
+        let spidersPerSide = 5;
+        for (let i = 0; i < spidersPerSide; i++) {
+          let x = lerp(marginX, marginX + cols * cellSize, (i + 1) / (spidersPerSide + 1));
+          borderSpiders.push(new BorderSpider("top", x));
+        }
+        for (let i = 0; i < spidersPerSide; i++) {
+          let x = lerp(marginX, marginX + cols * cellSize, (i + 1) / (spidersPerSide + 1));
+          borderSpiders.push(new BorderSpider("bottom", x));
+        }
+        for (let i = 0; i < spidersPerSide; i++) {
+          let y = lerp(marginY, marginY + rows * cellSize, (i + 1) / (spidersPerSide + 1));
+          borderSpiders.push(new BorderSpider("left", y));
+        }
+        for (let i = 0; i < spidersPerSide; i++) {
+          let y = lerp(marginY, marginY + rows * cellSize, (i + 1) / (spidersPerSide + 1));
+          borderSpiders.push(new BorderSpider("right", y));
+        }
+      }
+      
+      function getSolutionPath() {
+        let visited = [];
+        for (let i = 0; i < cols; i++) {
+          visited[i] = [];
+          for (let j = 0; j < rows; j++) {
+            visited[i][j] = false;
+          }
+        }
+        let path = [];
+        if (dfsPath(0, 0, path, visited)) return path;
+        else return null;
+      }
+      
+      function dfsPath(i, j, path, visited) {
+        path.push(createVector(i, j));
+        if (i === cols - 1 && j === rows - 1) return true;
+        visited[i][j] = true;
+        let neighbors = maze.getReachableNeighbors(i, j);
+        for (let np of neighbors) {
+          let ni = np.x, nj = np.y;
+          if (!visited[ni][nj]) {
+            if (dfsPath(ni, nj, path, visited)) return true;
+          }
+        }
+        path.pop();
+        return false;
+      }
+      
+      // Inicia el juego llamando a selectDifficulty()
+      selectDifficulty();
+    </script>
+  </body>
+</html>
